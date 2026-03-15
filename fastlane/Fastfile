@@ -1,0 +1,62 @@
+default_platform(:ios)
+
+# All values come from environment variables — zero hardcoded client values.
+# This single Fastfile serves all customer apps.
+
+platform :ios do
+  desc "Deploy iOS to TestFlight (prod)"
+  lane :deploy_ios_prod do
+    deploy_ios(environment: "prod")
+  end
+
+  desc "Deploy iOS to TestFlight (staging)"
+  lane :deploy_ios_staging do
+    deploy_ios(environment: "staging")
+  end
+
+  private_lane :deploy_ios do |options|
+    environment = options[:environment]
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV["APP_STORE_CONNECT_API_KEY_ID"],
+      issuer_id: ENV["APP_STORE_CONNECT_ISSUER_ID"],
+      key_filepath: ENV["APP_STORE_CONNECT_API_KEY_PATH"],
+      in_house: false
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      ipa: ENV["IPA_PATH"],
+      skip_waiting_for_build_processing: true,
+      distribute_external: false
+    )
+  end
+end
+
+platform :android do
+  desc "Deploy Android to Play Store (prod)"
+  lane :deploy_android_prod do
+    deploy_android(track: "production")
+  end
+
+  desc "Deploy Android to Play Store (staging)"
+  lane :deploy_android_staging do
+    deploy_android(track: "internal")
+  end
+
+  private_lane :deploy_android do |options|
+    track = options[:track]
+
+    upload_to_play_store(
+      json_key: ENV["PLAY_STORE_JSON_KEY_PATH"],
+      package_name: ENV["PACKAGE_NAME"],
+      aab: ENV["AAB_PATH"],
+      track: track,
+      release_status: "completed",
+      skip_upload_metadata: true,
+      skip_upload_changelogs: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true
+    )
+  end
+end

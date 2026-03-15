@@ -1,0 +1,13 @@
+# Thin trigger file — injected into customer repos by DartTrap.
+# Runs on every PR to validate the build compiles.
+
+name: Build Check
+on:
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  check:
+    uses: appyware/darttrap-pipelines/.github/workflows/flutter-build-only.yml@main
+    with:
+      flavor: "prod"

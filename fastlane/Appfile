@@ -1,0 +1,10 @@
+# Appfile — values are overridden at runtime via environment variables.
+# This file exists as a placeholder required by Fastlane.
+
+# iOS
+# app_identifier ENV["BUNDLE_ID"]
+# apple_id ENV["APPLE_ID"]
+
+# Android
+# package_name ENV["PACKAGE_NAME"]
+# json_key_file ENV["PLAY_STORE_JSON_KEY_PATH"]

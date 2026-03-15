@@ -1,0 +1,15 @@
+# Thin trigger file — injected into customer repos by DartTrap.
+# This is the ONLY file DartTrap adds to the customer's repository.
+
+name: Deploy Prod
+on: workflow_dispatch
+
+jobs:
+  deploy:
+    uses: appyware/darttrap-pipelines/.github/workflows/flutter-deploy-prod.yml@main
+    secrets: inherit
+    with:
+      bundle-id: "com.client.appname"
+      package-name: "com.client.appname"
+      flavor: "prod"
+      app-name: "App Name"

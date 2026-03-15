@@ -1,0 +1,151 @@
+name: Deploy iOS
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+        description: "Deployment environment (prod or staging)"
+      bundle-id:
+        required: true
+        type: string
+        description: "iOS bundle identifier"
+      app-name:
+        required: true
+        type: string
+        description: "Display name of the app"
+      flavor:
+        required: true
+        type: string
+        description: "Flutter flavor to build"
+      flutter-version:
+        required: false
+        type: string
+        default: "stable"
+        description: "Flutter version or channel"
+      version:
+        required: false
+        type: string
+        default: ""
+        description: "Version string (e.g. 1.4.2+42). If empty, reads from pubspec.yaml"
+    secrets:
+      IOS_P12_DISTRIBUTION_CERTIFICATE_BASE64:
+        required: true
+      IOS_P12_DISTRIBUTION_CERTIFICATE_PASSWORD:
+        required: true
+      IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64:
+        required: true
+      IOS_RUNNER_LOCAL_KEYCHAIN_PASSWORD:
+        required: true
+      IOS_EXPORT_OPTIONS_BASE64:
+        required: true
+      APP_STORE_CONNECT_ISSUER_ID:
+        required: true
+      APP_STORE_CONNECT_API_KEY_ID:
+        required: true
+      APP_STORE_CONNECT_API_PRIVATE_KEY:
+        required: true
+
+jobs:
+  build-and-deploy-ios:
+    name: Build & Deploy iOS (${{ inputs.environment }})
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Apple certificate and provisioning profile
+        env:
+          P12_BASE64: ${{ secrets.IOS_P12_DISTRIBUTION_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_P12_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_RUNNER_LOCAL_KEYCHAIN_PASSWORD }}
+        run: |
+          # Decode certificate and profile
+          CERTIFICATE_PATH=$RUNNER_TEMP/distribution.p12
+          PROFILE_PATH=$RUNNER_TEMP/distribution.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+          echo -n "$P12_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+          echo -n "$PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
+
+          # Create temporary keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate to keychain
+          security import "$CERTIFICATE_PATH" \
+            -P "$P12_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          # Install provisioning profile
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Decode export options plist
+        env:
+          EXPORT_OPTIONS_BASE64: ${{ secrets.IOS_EXPORT_OPTIONS_BASE64 }}
+        run: |
+          echo -n "$EXPORT_OPTIONS_BASE64" | base64 --decode -o $RUNNER_TEMP/ExportOptions.plist
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS release
+        run: |
+          flutter build ipa \
+            --release \
+            --flavor ${{ inputs.flavor }} \
+            --dart-define=ENV=${{ inputs.environment }} \
+            --dart-define=APP_NAME="${{ inputs.app-name }}" \
+            --dart-define=BUNDLE_ID=${{ inputs.bundle-id }} \
+            --export-options-plist=$RUNNER_TEMP/ExportOptions.plist \
+            ${{ inputs.version != '' && format('--build-number={0}', inputs.version) || '' }}
+
+      - name: Setup App Store Connect API key
+        env:
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$API_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8
+
+      - name: Upload to TestFlight
+        env:
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$(find build/ios/ipa -name '*.ipa' | head -1)" \
+            --apiKey "$API_KEY_ID" \
+            --apiIssuer "$API_ISSUER_ID"
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+          rm -f ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision || true
+          rm -rf ~/.appstoreconnect || true

@@ -1,0 +1,101 @@
+name: Flutter Build Check
+
+on:
+  workflow_call:
+    inputs:
+      flavor:
+        required: true
+        type: string
+        default: "prod"
+        description: "Flutter flavor to build"
+      flutter-version:
+        required: false
+        type: string
+        default: "stable"
+        description: "Flutter version or channel"
+      platform:
+        required: false
+        type: string
+        default: "ios_android"
+        description: "Target platform (ios_android, ios_only, android_only)"
+
+jobs:
+  analyze:
+    name: Analyze & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run analyzer
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run tests
+        run: flutter test
+
+  build-android:
+    name: Build Android
+    needs: analyze
+    if: inputs.platform == 'ios_android' || inputs.platform == 'android_only'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build APK (debug)
+        run: |
+          flutter build apk \
+            --debug \
+            --flavor ${{ inputs.flavor }}
+
+  build-ios:
+    name: Build iOS
+    needs: analyze
+    if: inputs.platform == 'ios_android' || inputs.platform == 'ios_only'
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        run: |
+          flutter build ios \
+            --debug \
+            --no-codesign \
+            --flavor ${{ inputs.flavor }}

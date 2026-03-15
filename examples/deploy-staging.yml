@@ -1,0 +1,14 @@
+# Thin trigger file — injected into customer repos by DartTrap.
+
+name: Deploy Staging
+on: workflow_dispatch
+
+jobs:
+  deploy:
+    uses: appyware/darttrap-pipelines/.github/workflows/flutter-deploy-staging.yml@main
+    secrets: inherit
+    with:
+      bundle-id: "com.client.appname"
+      package-name: "com.client.appname"
+      flavor: "staging"
+      app-name: "App Name"

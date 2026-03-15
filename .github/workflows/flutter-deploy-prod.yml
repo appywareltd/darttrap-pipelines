@@ -1,0 +1,92 @@
+name: Flutter Deploy Prod
+
+on:
+  workflow_call:
+    inputs:
+      bundle-id:
+        required: true
+        type: string
+        description: "iOS bundle identifier"
+      package-name:
+        required: true
+        type: string
+        description: "Android package name"
+      app-name:
+        required: true
+        type: string
+        description: "Display name of the app"
+      flavor:
+        required: true
+        type: string
+        default: "prod"
+        description: "Flutter flavor to build"
+      flutter-version:
+        required: false
+        type: string
+        default: "stable"
+        description: "Flutter version or channel"
+      platform:
+        required: false
+        type: string
+        default: "ios_android"
+        description: "Target platform (ios_android, ios_only, android_only)"
+      android-track:
+        required: false
+        type: string
+        default: "production"
+        description: "Play Store track"
+
+jobs:
+  version:
+    name: Calculate Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.semver.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout pipelines
+        uses: actions/checkout@v4
+        with:
+          repository: appyware/darttrap-pipelines
+          path: .darttrap
+          token: ${{ secrets.DARTTRAP_PIPELINES_TOKEN }}
+
+      - name: Calculate semantic version
+        id: semver
+        run: |
+          chmod +x .darttrap/scripts/semver.sh
+          VERSION=$(.darttrap/scripts/semver.sh)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  deploy-ios:
+    name: iOS
+    needs: version
+    if: inputs.platform == 'ios_android' || inputs.platform == 'ios_only'
+    uses: appyware/darttrap-pipelines/.github/workflows/_deploy-ios.yml@main
+    with:
+      environment: prod
+      bundle-id: ${{ inputs.bundle-id }}
+      app-name: ${{ inputs.app-name }}
+      flavor: ${{ inputs.flavor }}
+      flutter-version: ${{ inputs.flutter-version }}
+      version: ${{ needs.version.outputs.version }}
+    secrets: inherit
+
+  deploy-android:
+    name: Android
+    needs: version
+    if: inputs.platform == 'ios_android' || inputs.platform == 'android_only'
+    uses: appyware/darttrap-pipelines/.github/workflows/_deploy-android.yml@main
+    with:
+      environment: prod
+      package-name: ${{ inputs.package-name }}
+      app-name: ${{ inputs.app-name }}
+      flavor: ${{ inputs.flavor }}
+      flutter-version: ${{ inputs.flutter-version }}
+      version: ${{ needs.version.outputs.version }}
+      track: ${{ inputs.android-track }}
+    secrets: inherit
