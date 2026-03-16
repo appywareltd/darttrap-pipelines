@@ -46,7 +46,7 @@ jobs:
       - name: Checkout pipelines
         uses: actions/checkout@v4
         with:
-          repository: appyware/darttrap-pipelines
+          repository: appywareltd/darttrap-pipelines
           path: .darttrap
           token: ${{ secrets.DARTTRAP_PIPELINES_TOKEN }}
 
@@ -61,7 +61,7 @@ jobs:
     name: iOS
     needs: version
     if: inputs.platform == 'ios_android' || inputs.platform == 'ios_only'
-    uses: appyware/darttrap-pipelines/.github/workflows/_deploy-ios.yml@main
+    uses: appywareltd/darttrap-pipelines/.github/workflows/_deploy-ios.yml@main
     with:
       environment: staging
       bundle-id: ${{ inputs.bundle-id }}
@@ -75,7 +75,7 @@ jobs:
     name: Android
     needs: version
     if: inputs.platform == 'ios_android' || inputs.platform == 'android_only'
-    uses: appyware/darttrap-pipelines/.github/workflows/_deploy-android.yml@main
+    uses: appywareltd/darttrap-pipelines/.github/workflows/_deploy-android.yml@main
     with:
       environment: staging
       package-name: ${{ inputs.package-name }}
