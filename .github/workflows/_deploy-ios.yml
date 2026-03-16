@@ -16,9 +16,10 @@ on:
         type: string
         description: "Display name of the app"
       flavor:
-        required: true
+        required: false
         type: string
-        description: "Flutter flavor to build"
+        default: ""
+        description: "Flutter flavor to build (leave empty if app has no flavors)"
       flutter-version:
         required: false
         type: string
@@ -124,7 +125,7 @@ jobs:
         run: |
           flutter build ipa \
             --release \
-            --flavor ${{ inputs.flavor }} \
+            ${{ inputs.flavor != '' && format('--flavor {0}', inputs.flavor) || '' }} \
             --dart-define=ENV=${{ inputs.environment }} \
             --dart-define=APP_NAME="${{ inputs.app-name }}" \
             --dart-define=BUNDLE_ID=${{ inputs.bundle-id }} \

@@ -16,10 +16,10 @@ on:
         type: string
         description: "Display name of the app"
       flavor:
-        required: true
+        required: false
         type: string
-        default: "prod"
-        description: "Flutter flavor to build"
+        default: ""
+        description: "Flutter flavor to build (leave empty if app has no flavors)"
       flutter-version:
         required: false
         type: string

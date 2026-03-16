@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       flavor:
-        required: true
+        required: false
         type: string
-        default: "prod"
-        description: "Flutter flavor to build"
+        default: ""
+        description: "Flutter flavor to build (leave empty if app has no flavors)"
       flutter-version:
         required: false
         type: string
@@ -88,7 +88,7 @@ jobs:
         run: |
           flutter build apk \
             --debug \
-            --flavor ${{ inputs.flavor }}
+            ${{ inputs.flavor != '' && format('--flavor {0}', inputs.flavor) || '' }}
 
   build-ios:
     name: Build iOS
@@ -122,4 +122,4 @@ jobs:
           flutter build ios \
             --debug \
             --no-codesign \
-            --flavor ${{ inputs.flavor }}
+            ${{ inputs.flavor != '' && format('--flavor {0}', inputs.flavor) || '' }}
