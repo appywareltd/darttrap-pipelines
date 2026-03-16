@@ -23,8 +23,8 @@ on:
       flutter-version:
         required: false
         type: string
-        default: "stable"
-        description: "Flutter version or channel"
+        default: ""
+        description: "Flutter version (e.g. 3.22.0). Leave empty for latest stable."
       platform:
         required: false
         type: string

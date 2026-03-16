@@ -11,8 +11,8 @@ on:
       flutter-version:
         required: false
         type: string
-        default: "stable"
-        description: "Flutter version or channel"
+        default: ""
+        description: "Flutter version (e.g. 3.22.0). Leave empty for latest stable."
       platform:
         required: false
         type: string
@@ -27,10 +27,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: Setup Flutter (specific version)
+        if: inputs.flutter-version != ''
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Setup Flutter (latest stable)
+        if: inputs.flutter-version == ''
+        uses: subosito/flutter-action@v2
+        with:
           channel: stable
           cache: true
 
@@ -58,10 +66,18 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Flutter
+      - name: Setup Flutter (specific version)
+        if: inputs.flutter-version != ''
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Setup Flutter (latest stable)
+        if: inputs.flutter-version == ''
+        uses: subosito/flutter-action@v2
+        with:
           channel: stable
           cache: true
 
@@ -83,10 +99,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Flutter
+      - name: Setup Flutter (specific version)
+        if: inputs.flutter-version != ''
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ inputs.flutter-version }}
+          channel: stable
+          cache: true
+
+      - name: Setup Flutter (latest stable)
+        if: inputs.flutter-version == ''
+        uses: subosito/flutter-action@v2
+        with:
           channel: stable
           cache: true
 
