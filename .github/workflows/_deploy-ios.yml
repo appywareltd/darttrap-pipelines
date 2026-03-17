@@ -141,33 +141,50 @@ jobs:
           cache: true
 
       - name: Configure signing for CI
-        env:
-          EXTENSION_PROFILES_JSON: ${{ secrets.IOS_EXTENSION_PROFILES_JSON }}
         run: |
-          # Override signing via xcconfig — no pbxproj mutations needed
-          XCCONFIG="ios/DartTrapCI.xcconfig"
-          cat > "$XCCONFIG" <<'XCEOF'
-          CODE_SIGN_STYLE = Manual
-          DEVELOPMENT_TEAM =
-          XCEOF
+          # Build a map of bundle_id -> profile_name from all installed .mobileprovision files
+          declare -A PROFILE_MAP
+          for profile in ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision; do
+            [ -f "$profile" ] || continue
+            PLIST=$(security cms -D -i "$profile" 2>/dev/null) || continue
+            BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" /dev/stdin <<< "$PLIST" 2>/dev/null | sed 's/^[A-Z0-9]*\.//')
+            PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< "$PLIST" 2>/dev/null)
+            if [ -n "$BUNDLE_ID" ] && [ -n "$PROFILE_NAME" ]; then
+              PROFILE_MAP["$BUNDLE_ID"]="$PROFILE_NAME"
+              echo "Mapped profile: $BUNDLE_ID -> $PROFILE_NAME"
+            fi
+          done
 
-          # Inject the xcconfig into Release configurations via the Flutter-generated xcconfig
-          # Flutter's build system includes ios/Flutter/Release.xcconfig, so we append our overrides there
-          RELEASE_XCCONFIG="ios/Flutter/Release.xcconfig"
-          if [ -f "$RELEASE_XCCONFIG" ]; then
-            echo "" >> "$RELEASE_XCCONFIG"
-            echo "#include \"../DartTrapCI.xcconfig\"" >> "$RELEASE_XCCONFIG"
-          fi
+          # Use xcodeproj gem (pre-installed via CocoaPods) to configure signing properly
+          ruby <<RUBY
+          require 'xcodeproj'
 
-          # For extensions without provisioning profiles, disable signing via xcconfig per target
-          if [ -z "$EXTENSION_PROFILES_JSON" ]; then
-            for ext_dir in ios/*/; do
-              ext_name=$(basename "$ext_dir")
-              if [ "$ext_name" != "Runner" ] && [ "$ext_name" != "Pods" ] && [ "$ext_name" != "Flutter" ] && [ "$ext_name" != "RunnerTests" ] && [ -d "$ext_dir" ]; then
-                echo "Extension target found: $ext_name (no profiles, will rely on export options)"
-              fi
-            done
-          fi
+          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+          profile_map = {
+          $(for bid in "${!PROFILE_MAP[@]}"; do echo "  '$bid' => '${PROFILE_MAP[$bid]}',"; done)
+          }
+
+          project.targets.each do |target|
+            target.build_configurations.each do |config|
+              next unless config.name == 'Release' || config.name == 'Release-Runner' || config.name.start_with?('Release')
+
+              bs = config.build_settings
+              bs['CODE_SIGN_STYLE'] = 'Manual'
+              bs['CODE_SIGN_IDENTITY'] = 'Apple Distribution'
+              bs['DEVELOPMENT_TEAM'] = ''
+
+              bundle_id = bs['PRODUCT_BUNDLE_IDENTIFIER']
+              if bundle_id && profile_map[bundle_id]
+                bs['PROVISIONING_PROFILE_SPECIFIER'] = profile_map[bundle_id]
+                puts "#{target.name} (#{config.name}): #{bundle_id} -> #{profile_map[bundle_id]}"
+              elsif target.name != 'RunnerTests'
+                puts "WARNING: No profile found for #{target.name} (#{bundle_id})"
+              end
+            end
+          end
+
+          project.save
+          RUBY
 
       - name: Install dependencies
         run: flutter pub get
