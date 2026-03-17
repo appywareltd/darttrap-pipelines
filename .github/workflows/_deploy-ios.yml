@@ -122,10 +122,13 @@ jobs:
         run: flutter pub get
 
       - name: Build iOS release
+        env:
+          FLUTTER_XCODE_SCHEME: ${{ inputs.flavor || 'Runner' }}
         run: |
+          FLAVOR="${{ inputs.flavor }}"
           flutter build ipa \
             --release \
-            ${{ inputs.flavor != '' && format('--flavor {0}', inputs.flavor) || '' }} \
+            ${FLAVOR:+--flavor $FLAVOR} \
             --dart-define=ENV=${{ inputs.environment }} \
             --dart-define=APP_NAME="${{ inputs.app-name }}" \
             --dart-define=BUNDLE_ID=${{ inputs.bundle-id }} \

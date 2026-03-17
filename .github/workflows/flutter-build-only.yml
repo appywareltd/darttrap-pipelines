@@ -118,8 +118,11 @@ jobs:
         run: flutter pub get
 
       - name: Build iOS (no codesign)
+        env:
+          FLUTTER_XCODE_SCHEME: ${{ inputs.flavor || 'Runner' }}
         run: |
+          FLAVOR="${{ inputs.flavor }}"
           flutter build ios \
             --debug \
             --no-codesign \
-            ${{ inputs.flavor != '' && format('--flavor {0}', inputs.flavor) || '' }}
+            ${FLAVOR:+--flavor $FLAVOR}
