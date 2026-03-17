@@ -148,8 +148,8 @@ jobs:
 
           # Build bundle_id -> profile_name map from installed .mobileprovision files
           profile_map = {}
+          team_id = nil
           Dir.glob(File.expand_path("~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision")).each do |path|
-            # Extract the embedded plist from the CMS envelope
             plist_xml = `security cms -D -i "#{path}" 2>/dev/null`
             next if plist_xml.empty?
 
@@ -157,9 +157,10 @@ jobs:
             data = CFPropertyList.native_types(plist.value)
 
             app_id = data.dig("Entitlements", "application-identifier") || ""
-            # Strip team ID prefix (e.g., "ABC123.com.company.app" -> "com.company.app")
             bundle_id = app_id.sub(/^[A-Z0-9]+\./, "")
             profile_name = data["Name"] || ""
+            team_ids = data["TeamIdentifier"] || []
+            team_id ||= team_ids.first
 
             unless bundle_id.empty? || profile_name.empty?
               profile_map[bundle_id] = profile_name
@@ -167,24 +168,32 @@ jobs:
             end
           end
 
-          # Configure Xcode project for manual signing with correct profiles per target
+          puts "Team ID: #{team_id || 'not found'}"
+
+          # Configure Xcode project for manual signing on ALL configurations
           project = Xcodeproj::Project.open("ios/Runner.xcodeproj")
 
           project.targets.each do |target|
-            target.build_configurations.each do |config|
-              next unless config.name == "Release" || config.name.start_with?("Release")
+            next if target.name == "RunnerTests"
 
+            target.build_configurations.each do |config|
               bs = config.build_settings
               bs["CODE_SIGN_STYLE"] = "Manual"
-              bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
-              bs["DEVELOPMENT_TEAM"] = ""
+              bs["DEVELOPMENT_TEAM"] = team_id || ""
 
-              bundle_id = bs["PRODUCT_BUNDLE_IDENTIFIER"]
-              if bundle_id && profile_map[bundle_id]
-                bs["PROVISIONING_PROFILE_SPECIFIER"] = profile_map[bundle_id]
-                puts "#{target.name} (#{config.name}): #{bundle_id} -> #{profile_map[bundle_id]}"
-              elsif target.name != "RunnerTests"
-                puts "WARNING: No profile found for #{target.name} (#{bundle_id})"
+              # Release configs get distribution identity + provisioning profile
+              if config.name == "Release" || config.name.start_with?("Release")
+                bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
+                bundle_id = bs["PRODUCT_BUNDLE_IDENTIFIER"]
+                if bundle_id && profile_map[bundle_id]
+                  bs["PROVISIONING_PROFILE_SPECIFIER"] = profile_map[bundle_id]
+                  puts "#{target.name} (#{config.name}): #{bundle_id} -> #{profile_map[bundle_id]}"
+                else
+                  puts "WARNING: No profile found for #{target.name} (#{bundle_id})"
+                end
+              else
+                # Debug/Profile configs — manual signing, no specific profile needed
+                bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
               end
             end
           end
