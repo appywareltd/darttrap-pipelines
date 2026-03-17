@@ -142,42 +142,48 @@ jobs:
 
       - name: Configure signing for CI
         run: |
-          # Build a map of bundle_id -> profile_name from all installed .mobileprovision files
-          declare -A PROFILE_MAP
-          for profile in ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision; do
-            [ -f "$profile" ] || continue
-            PLIST=$(security cms -D -i "$profile" 2>/dev/null) || continue
-            BUNDLE_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" /dev/stdin <<< "$PLIST" 2>/dev/null | sed 's/^[A-Z0-9]*\.//')
-            PROFILE_NAME=$(/usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< "$PLIST" 2>/dev/null)
-            if [ -n "$BUNDLE_ID" ] && [ -n "$PROFILE_NAME" ]; then
-              PROFILE_MAP["$BUNDLE_ID"]="$PROFILE_NAME"
-              echo "Mapped profile: $BUNDLE_ID -> $PROFILE_NAME"
-            fi
-          done
-
-          # Use xcodeproj gem (pre-installed via CocoaPods) to configure signing properly
-          ruby <<RUBY
+          ruby <<'RUBY'
           require 'xcodeproj'
+          require 'cfpropertylist'
 
-          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
-          profile_map = {
-          $(for bid in "${!PROFILE_MAP[@]}"; do echo "  '$bid' => '${PROFILE_MAP[$bid]}',"; done)
-          }
+          # Build bundle_id -> profile_name map from installed .mobileprovision files
+          profile_map = {}
+          Dir.glob(File.expand_path("~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision")).each do |path|
+            # Extract the embedded plist from the CMS envelope
+            plist_xml = `security cms -D -i "#{path}" 2>/dev/null`
+            next if plist_xml.empty?
+
+            plist = CFPropertyList::List.new(data: plist_xml)
+            data = CFPropertyList.native_types(plist.value)
+
+            app_id = data.dig("Entitlements", "application-identifier") || ""
+            # Strip team ID prefix (e.g., "ABC123.com.company.app" -> "com.company.app")
+            bundle_id = app_id.sub(/^[A-Z0-9]+\./, "")
+            profile_name = data["Name"] || ""
+
+            unless bundle_id.empty? || profile_name.empty?
+              profile_map[bundle_id] = profile_name
+              puts "Mapped profile: #{bundle_id} -> #{profile_name}"
+            end
+          end
+
+          # Configure Xcode project for manual signing with correct profiles per target
+          project = Xcodeproj::Project.open("ios/Runner.xcodeproj")
 
           project.targets.each do |target|
             target.build_configurations.each do |config|
-              next unless config.name == 'Release' || config.name == 'Release-Runner' || config.name.start_with?('Release')
+              next unless config.name == "Release" || config.name.start_with?("Release")
 
               bs = config.build_settings
-              bs['CODE_SIGN_STYLE'] = 'Manual'
-              bs['CODE_SIGN_IDENTITY'] = 'Apple Distribution'
-              bs['DEVELOPMENT_TEAM'] = ''
+              bs["CODE_SIGN_STYLE"] = "Manual"
+              bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
+              bs["DEVELOPMENT_TEAM"] = ""
 
-              bundle_id = bs['PRODUCT_BUNDLE_IDENTIFIER']
+              bundle_id = bs["PRODUCT_BUNDLE_IDENTIFIER"]
               if bundle_id && profile_map[bundle_id]
-                bs['PROVISIONING_PROFILE_SPECIFIER'] = profile_map[bundle_id]
+                bs["PROVISIONING_PROFILE_SPECIFIER"] = profile_map[bundle_id]
                 puts "#{target.name} (#{config.name}): #{bundle_id} -> #{profile_map[bundle_id]}"
-              elsif target.name != 'RunnerTests'
+              elsif target.name != "RunnerTests"
                 puts "WARNING: No profile found for #{target.name} (#{bundle_id})"
               end
             end
