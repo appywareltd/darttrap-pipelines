@@ -102,13 +102,21 @@ jobs:
 
       - name: Build Android App Bundle
         run: |
+          VERSION="${{ inputs.version }}"
+          VERSION_ARGS=""
+          if [ -n "$VERSION" ]; then
+            BUILD_NAME="${VERSION%%+*}"
+            BUILD_NUMBER="${VERSION##*+}"
+            VERSION_ARGS="--build-name=$BUILD_NAME --build-number=$BUILD_NUMBER"
+          fi
+
           flutter build appbundle \
             --release \
             ${{ inputs.flavor != '' && format('--flavor {0}', inputs.flavor) || '' }} \
             --dart-define=ENV=${{ inputs.environment }} \
             --dart-define=APP_NAME="${{ inputs.app-name }}" \
             --dart-define=BUNDLE_ID=${{ inputs.package-name }} \
-            ${{ inputs.version != '' && format('--build-number={0}', inputs.version) || '' }}
+            $VERSION_ARGS
 
       - name: Setup Play Store credentials
         env:

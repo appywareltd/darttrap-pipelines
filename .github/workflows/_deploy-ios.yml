@@ -144,24 +144,27 @@ jobs:
         env:
           EXTENSION_PROFILES_JSON: ${{ secrets.IOS_EXTENSION_PROFILES_JSON }}
         run: |
-          PBXPROJ="ios/Runner.xcodeproj/project.pbxproj"
-          if [ -f "$PBXPROJ" ]; then
-            # Switch all targets from automatic to manual signing
-            sed -i '' 's/CODE_SIGN_STYLE = Automatic/CODE_SIGN_STYLE = Manual/g' "$PBXPROJ"
-            # Clear development team (manual signing doesn't need it)
-            sed -i '' 's/DEVELOPMENT_TEAM = [^;]*/DEVELOPMENT_TEAM = /g' "$PBXPROJ"
+          # Override signing via xcconfig — no pbxproj mutations needed
+          XCCONFIG="ios/DartTrapCI.xcconfig"
+          cat > "$XCCONFIG" <<'XCEOF'
+          CODE_SIGN_STYLE = Manual
+          DEVELOPMENT_TEAM =
+          XCEOF
 
-            # Handle extension targets
+          # Inject the xcconfig into Release configurations via the Flutter-generated xcconfig
+          # Flutter's build system includes ios/Flutter/Release.xcconfig, so we append our overrides there
+          RELEASE_XCCONFIG="ios/Flutter/Release.xcconfig"
+          if [ -f "$RELEASE_XCCONFIG" ]; then
+            echo "" >> "$RELEASE_XCCONFIG"
+            echo "#include \"../DartTrapCI.xcconfig\"" >> "$RELEASE_XCCONFIG"
+          fi
+
+          # For extensions without provisioning profiles, disable signing via xcconfig per target
+          if [ -z "$EXTENSION_PROFILES_JSON" ]; then
             for ext_dir in ios/*/; do
               ext_name=$(basename "$ext_dir")
               if [ "$ext_name" != "Runner" ] && [ "$ext_name" != "Pods" ] && [ "$ext_name" != "Flutter" ] && [ "$ext_name" != "RunnerTests" ] && [ -d "$ext_dir" ]; then
-                if [ -n "$EXTENSION_PROFILES_JSON" ]; then
-                  echo "Extension target found: $ext_name (profiles provided, signing enabled)"
-                else
-                  echo "Extension target found: $ext_name (no profiles, disabling signing)"
-                  # Disable code signing for extensions that don't have provisioning profiles
-                  sed -i '' "/Begin.*${ext_name}/,/End.*${ext_name}/s/CODE_SIGNING_ALLOWED = YES/CODE_SIGNING_ALLOWED = NO/g" "$PBXPROJ"
-                fi
+                echo "Extension target found: $ext_name (no profiles, will rely on export options)"
               fi
             done
           fi
@@ -174,6 +177,14 @@ jobs:
           FLUTTER_XCODE_SCHEME: ${{ inputs.flavor || 'Runner' }}
         run: |
           FLAVOR="${{ inputs.flavor }}"
+          VERSION="${{ inputs.version }}"
+          VERSION_ARGS=""
+          if [ -n "$VERSION" ]; then
+            BUILD_NAME="${VERSION%%+*}"
+            BUILD_NUMBER="${VERSION##*+}"
+            VERSION_ARGS="--build-name=$BUILD_NAME --build-number=$BUILD_NUMBER"
+          fi
+
           flutter build ipa \
             --release \
             ${FLAVOR:+--flavor $FLAVOR} \
@@ -181,7 +192,7 @@ jobs:
             --dart-define=APP_NAME="${{ inputs.app-name }}" \
             --dart-define=BUNDLE_ID=${{ inputs.bundle-id }} \
             --export-options-plist=$RUNNER_TEMP/ExportOptions.plist \
-            ${{ inputs.version != '' && format('--build-number={0}', inputs.version) || '' }}
+            $VERSION_ARGS
 
       - name: Setup App Store Connect API key
         env:
