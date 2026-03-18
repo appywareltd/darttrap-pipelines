@@ -31,18 +31,6 @@ on:
         default: ""
         description: "Version string (e.g. 1.4.2+42). If empty, reads from pubspec.yaml"
     secrets:
-      IOS_P12_DISTRIBUTION_CERTIFICATE_BASE64:
-        required: true
-      IOS_P12_DISTRIBUTION_CERTIFICATE_PASSWORD:
-        required: true
-      IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64:
-        required: true
-      IOS_RUNNER_LOCAL_KEYCHAIN_PASSWORD:
-        required: true
-      IOS_EXPORT_OPTIONS_BASE64:
-        required: true
-      IOS_EXTENSION_PROFILES_JSON:
-        required: false
       APP_STORE_CONNECT_ISSUER_ID:
         required: true
       APP_STORE_CONNECT_API_KEY_ID:
@@ -60,70 +48,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Apple certificate and provisioning profiles
+      - name: Setup App Store Connect API key
         env:
-          P12_BASE64: ${{ secrets.IOS_P12_DISTRIBUTION_CERTIFICATE_BASE64 }}
-          P12_PASSWORD: ${{ secrets.IOS_P12_DISTRIBUTION_CERTIFICATE_PASSWORD }}
-          PROFILE_BASE64: ${{ secrets.IOS_DISTRIBUTION_PROVISIONING_PROFILE_BASE64 }}
-          KEYCHAIN_PASSWORD: ${{ secrets.IOS_RUNNER_LOCAL_KEYCHAIN_PASSWORD }}
-          EXTENSION_PROFILES_JSON: ${{ secrets.IOS_EXTENSION_PROFILES_JSON }}
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
         run: |
-          # Decode certificate and main profile
-          CERTIFICATE_PATH=$RUNNER_TEMP/distribution.p12
-          PROFILE_PATH=$RUNNER_TEMP/distribution.mobileprovision
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          mkdir -p $RUNNER_TEMP/asc_keys
+          echo -n "$API_PRIVATE_KEY" > $RUNNER_TEMP/asc_keys/AuthKey_${API_KEY_ID}.p8
 
-          echo -n "$P12_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
-          echo -n "$PROFILE_BASE64" | base64 --decode -o "$PROFILE_PATH"
-
-          # Create temporary keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import certificate to keychain
-          security import "$CERTIFICATE_PATH" \
-            -P "$P12_PASSWORD" \
-            -A \
-            -t cert \
-            -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" \
-            "$KEYCHAIN_PATH"
-
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-
-          # Install main provisioning profile
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
-
-          # Install extension provisioning profiles (if any)
-          if [ -n "$EXTENSION_PROFILES_JSON" ]; then
-            echo "$EXTENSION_PROFILES_JSON" | python3 -c "
-          import json, sys, base64
-          profiles = json.load(sys.stdin)
-          for bundle_id, profile_b64 in profiles.items():
-              safe_name = bundle_id.replace('.', '_')
-              path = '$RUNNER_TEMP/' + safe_name + '.mobileprovision'
-              with open(path, 'wb') as f:
-                  f.write(base64.b64decode(profile_b64))
-              print(f'Installed extension profile: {bundle_id} -> {path}')
-          "
-
-            # Copy all decoded extension profiles to the provisioning profiles directory
-            for f in $RUNNER_TEMP/*.mobileprovision; do
-              [ -f "$f" ] && cp "$f" ~/Library/MobileDevice/Provisioning\ Profiles/
-            done
-          fi
-
-      - name: Decode export options plist
-        env:
-          EXPORT_OPTIONS_BASE64: ${{ secrets.IOS_EXPORT_OPTIONS_BASE64 }}
-        run: |
-          echo -n "$EXPORT_OPTIONS_BASE64" | base64 --decode -o $RUNNER_TEMP/ExportOptions.plist
+          # Also setup for altool upload
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo -n "$API_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8
 
       - name: Setup Flutter (specific version)
         if: inputs.flutter-version != ''
@@ -140,73 +76,10 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Configure signing for CI
-        run: |
-          ruby <<'RUBY'
-          require 'xcodeproj'
-          require 'cfpropertylist'
-
-          # Build bundle_id -> profile_name map from installed .mobileprovision files
-          profile_map = {}
-          team_id = nil
-          Dir.glob(File.expand_path("~/Library/MobileDevice/Provisioning Profiles/*.mobileprovision")).each do |path|
-            plist_xml = `security cms -D -i "#{path}" 2>/dev/null`
-            next if plist_xml.empty?
-
-            plist = CFPropertyList::List.new(data: plist_xml)
-            data = CFPropertyList.native_types(plist.value)
-
-            app_id = data.dig("Entitlements", "application-identifier") || ""
-            bundle_id = app_id.sub(/^[A-Z0-9]+\./, "")
-            profile_name = data["Name"] || ""
-            team_ids = data["TeamIdentifier"] || []
-            team_id ||= team_ids.first
-
-            unless bundle_id.empty? || profile_name.empty?
-              profile_map[bundle_id] = profile_name
-              puts "Mapped profile: #{bundle_id} -> #{profile_name}"
-            end
-          end
-
-          puts "Team ID: #{team_id || 'not found'}"
-
-          # Configure Xcode project for manual signing on ALL configurations
-          project = Xcodeproj::Project.open("ios/Runner.xcodeproj")
-
-          project.targets.each do |target|
-            next if target.name == "RunnerTests"
-
-            target.build_configurations.each do |config|
-              bs = config.build_settings
-              bs["CODE_SIGN_STYLE"] = "Manual"
-              bs["DEVELOPMENT_TEAM"] = team_id || ""
-
-              # Release configs get distribution identity + provisioning profile
-              if config.name == "Release" || config.name.start_with?("Release")
-                bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
-                bundle_id = bs["PRODUCT_BUNDLE_IDENTIFIER"]
-                if bundle_id && profile_map[bundle_id]
-                  bs["PROVISIONING_PROFILE_SPECIFIER"] = profile_map[bundle_id]
-                  puts "#{target.name} (#{config.name}): #{bundle_id} -> #{profile_map[bundle_id]}"
-                else
-                  puts "WARNING: No profile found for #{target.name} (#{bundle_id})"
-                end
-              else
-                # Debug/Profile configs — manual signing, no specific profile needed
-                bs["CODE_SIGN_IDENTITY"] = "Apple Distribution"
-              end
-            end
-          end
-
-          project.save
-          RUBY
-
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Build iOS release
-        env:
-          FLUTTER_XCODE_SCHEME: ${{ inputs.flavor || 'Runner' }}
+      - name: Prepare iOS build
         run: |
           FLAVOR="${{ inputs.flavor }}"
           VERSION="${{ inputs.version }}"
@@ -217,23 +90,68 @@ jobs:
             VERSION_ARGS="--build-name=$BUILD_NAME --build-number=$BUILD_NUMBER"
           fi
 
-          flutter build ipa \
+          # Build without signing to trigger all Flutter migrations (UIScene, pbxproj, Podfile)
+          # and compile Dart code. This also writes Generated.xcconfig with dart defines + version.
+          flutter build ios --no-codesign \
             --release \
             ${FLAVOR:+--flavor $FLAVOR} \
             --dart-define=ENV=${{ inputs.environment }} \
             --dart-define=APP_NAME="${{ inputs.app-name }}" \
             --dart-define=BUNDLE_ID=${{ inputs.bundle-id }} \
-            --export-options-plist=$RUNNER_TEMP/ExportOptions.plist \
             $VERSION_ARGS
 
-      - name: Setup App Store Connect API key
+          # Re-run pod install in case Podfile was upgraded during migration
+          cd ios && pod install --repo-update 2>/dev/null || true && cd ..
+
+      - name: Generate export options
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Archive with automatic signing
         env:
           API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          API_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY }}
         run: |
-          mkdir -p ~/.appstoreconnect/private_keys
-          echo -n "$API_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${API_KEY_ID}.p8
+          SCHEME="${{ inputs.flavor || 'Runner' }}"
+
+          xcodebuild archive \
+            -workspace ios/Runner.xcworkspace \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/Runner.xcarchive \
+            -destination 'generic/platform=iOS' \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath $RUNNER_TEMP/asc_keys/AuthKey_${API_KEY_ID}.p8 \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER_ID" \
+            CODE_SIGN_STYLE=Automatic
+
+      - name: Export IPA
+        env:
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/Runner.xcarchive \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
+            -exportPath $RUNNER_TEMP/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath $RUNNER_TEMP/asc_keys/AuthKey_${API_KEY_ID}.p8 \
+            -authenticationKeyID "$API_KEY_ID" \
+            -authenticationKeyIssuerID "$API_ISSUER_ID"
 
       - name: Upload to TestFlight
         env:
@@ -242,13 +160,14 @@ jobs:
         run: |
           xcrun altool --upload-app \
             --type ios \
-            --file "$(find build/ios/ipa -name '*.ipa' | head -1)" \
+            --file "$(find $RUNNER_TEMP/export -name '*.ipa' | head -1)" \
             --apiKey "$API_KEY_ID" \
             --apiIssuer "$API_ISSUER_ID"
 
-      - name: Cleanup keychain
+      - name: Cleanup
         if: always()
         run: |
-          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
-          rm -f ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision || true
+          rm -rf $RUNNER_TEMP/asc_keys || true
           rm -rf ~/.appstoreconnect || true
+          rm -rf $RUNNER_TEMP/Runner.xcarchive || true
+          rm -rf $RUNNER_TEMP/export || true
