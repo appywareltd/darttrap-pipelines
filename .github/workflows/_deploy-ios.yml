@@ -112,7 +112,8 @@ jobs:
           # Get the team ID (provider short name) associated with the API key
           OUTPUT=$(xcrun altool --list-providers --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID" 2>&1)
           echo "$OUTPUT"
-          TEAM_ID=$(echo "$OUTPUT" | awk 'NR>2 && NF>0 {print $NF}' | head -1)
+          # Extract team ID: 10-character alphanumeric string (skip header/separator lines)
+          TEAM_ID=$(echo "$OUTPUT" | grep -oE '\b[A-Z0-9]{10}\b' | head -1)
           echo "Detected team ID: $TEAM_ID"
           echo "team_id=$TEAM_ID" >> "$GITHUB_OUTPUT"
 
