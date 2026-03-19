@@ -103,17 +103,34 @@ jobs:
           # Re-run pod install in case Podfile was upgraded during migration
           cd ios && pod install --repo-update 2>/dev/null || true && cd ..
 
-      - name: Generate export options
+      - name: Detect team ID
+        id: team
+        env:
+          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
-          cat > $RUNNER_TEMP/ExportOptions.plist <<'EOF'
+          # Get the team ID (provider short name) associated with the API key
+          OUTPUT=$(xcrun altool --list-providers --apiKey "$API_KEY_ID" --apiIssuer "$API_ISSUER_ID" 2>&1)
+          echo "$OUTPUT"
+          TEAM_ID=$(echo "$OUTPUT" | awk 'NR>2 && NF>0 {print $NF}' | head -1)
+          echo "Detected team ID: $TEAM_ID"
+          echo "team_id=$TEAM_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate export options
+        env:
+          TEAM_ID: ${{ steps.team.outputs.team_id }}
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
           <dict>
               <key>method</key>
-              <string>app-store</string>
+              <string>app-store-connect</string>
               <key>signingStyle</key>
               <string>automatic</string>
+              <key>teamID</key>
+              <string>${TEAM_ID}</string>
               <key>uploadSymbols</key>
               <true/>
           </dict>
@@ -124,6 +141,7 @@ jobs:
         env:
           API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ steps.team.outputs.team_id }}
         run: |
           SCHEME="${{ inputs.flavor || 'Runner' }}"
 
@@ -137,7 +155,8 @@ jobs:
             -authenticationKeyPath $RUNNER_TEMP/asc_keys/AuthKey_${API_KEY_ID}.p8 \
             -authenticationKeyID "$API_KEY_ID" \
             -authenticationKeyIssuerID "$API_ISSUER_ID" \
-            CODE_SIGN_STYLE=Automatic
+            CODE_SIGN_STYLE=Automatic \
+            DEVELOPMENT_TEAM="$TEAM_ID"
 
       - name: Export IPA
         env:
