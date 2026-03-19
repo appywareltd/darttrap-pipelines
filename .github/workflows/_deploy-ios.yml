@@ -117,27 +117,6 @@ jobs:
           echo "Detected team ID: $TEAM_ID"
           echo "team_id=$TEAM_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Generate export options
-        env:
-          TEAM_ID: ${{ steps.team.outputs.team_id }}
-        run: |
-          cat > $RUNNER_TEMP/ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store</string>
-              <key>signingStyle</key>
-              <string>automatic</string>
-              <key>teamID</key>
-              <string>${TEAM_ID}</string>
-              <key>uploadSymbols</key>
-              <true/>
-          </dict>
-          </plist>
-          EOF
-
       - name: Archive with automatic signing
         env:
           API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
@@ -159,19 +138,77 @@ jobs:
             CODE_SIGN_STYLE=Automatic \
             DEVELOPMENT_TEAM="$TEAM_ID"
 
-      - name: Export IPA
+      - name: Generate export options from archive
         env:
-          API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ steps.team.outputs.team_id }}
+        run: |
+          ARCHIVE="$RUNNER_TEMP/Runner.xcarchive"
+
+          # Extract provisioning profile UUIDs from the signed archive
+          PROFILES_XML="<dict>"
+
+          # Main app profile
+          MAIN_APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
+          if [ -f "$MAIN_APP/embedded.mobileprovision" ]; then
+            MAIN_UUID=$(/usr/bin/security cms -D -i "$MAIN_APP/embedded.mobileprovision" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin)
+            MAIN_BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$MAIN_APP/Info.plist")
+            PROFILES_XML="$PROFILES_XML
+              <key>$MAIN_BUNDLE</key>
+              <string>$MAIN_UUID</string>"
+            echo "Main app: $MAIN_BUNDLE -> $MAIN_UUID"
+          fi
+
+          # Extension profiles (if any)
+          if [ -d "$MAIN_APP/PlugIns" ]; then
+            for EXTENSION in "$MAIN_APP/PlugIns"/*.appex; do
+              if [ -f "$EXTENSION/embedded.mobileprovision" ]; then
+                EXT_UUID=$(/usr/bin/security cms -D -i "$EXTENSION/embedded.mobileprovision" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin)
+                EXT_BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$EXTENSION/Info.plist")
+                PROFILES_XML="$PROFILES_XML
+              <key>$EXT_BUNDLE</key>
+              <string>$EXT_UUID</string>"
+                echo "Extension: $EXT_BUNDLE -> $EXT_UUID"
+              fi
+            done
+          fi
+
+          PROFILES_XML="$PROFILES_XML
+            </dict>"
+
+          # Detect signing certificate name from the archive
+          SIGN_IDENTITY=$(codesign -dvv "$MAIN_APP" 2>&1 | grep "Authority=" | head -1 | sed 's/Authority=//')
+          echo "Signing identity: $SIGN_IDENTITY"
+
+          cat > $RUNNER_TEMP/ExportOptions.plist <<PLISTEOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store-connect</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>teamID</key>
+              <string>${TEAM_ID}</string>
+              <key>signingCertificate</key>
+              <string>${SIGN_IDENTITY}</string>
+              <key>provisioningProfiles</key>
+              ${PROFILES_XML}
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          PLISTEOF
+
+          echo "Generated ExportOptions.plist:"
+          cat $RUNNER_TEMP/ExportOptions.plist
+
+      - name: Export IPA
         run: |
           xcodebuild -exportArchive \
             -archivePath $RUNNER_TEMP/Runner.xcarchive \
             -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
-            -exportPath $RUNNER_TEMP/export \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath $RUNNER_TEMP/asc_keys/AuthKey_${API_KEY_ID}.p8 \
-            -authenticationKeyID "$API_KEY_ID" \
-            -authenticationKeyIssuerID "$API_ISSUER_ID"
+            -exportPath $RUNNER_TEMP/export
 
       - name: Upload to TestFlight
         env:
