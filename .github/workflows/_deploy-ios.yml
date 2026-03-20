@@ -144,63 +144,74 @@ jobs:
         run: |
           ARCHIVE="$RUNNER_TEMP/Runner.xcarchive"
 
-          # Extract provisioning profile UUIDs from the signed archive
-          PROFILES_XML="<dict>"
+          echo "=== Archive contents ==="
+          ls -la "$ARCHIVE/Products/Applications/"
+          MAIN_APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
+          echo "Main app: $MAIN_APP"
+
+          # Extract provisioning profile UUID from a mobileprovision file
+          extract_uuid() {
+            local PROV="$1"
+            /usr/bin/security cms -D -i "$PROV" > /tmp/profile_plist.xml
+            /usr/libexec/PlistBuddy -c "Print UUID" /tmp/profile_plist.xml
+          }
+
+          PROFILES_XML=""
 
           # Main app profile
-          MAIN_APP=$(find "$ARCHIVE/Products/Applications" -maxdepth 1 -name "*.app" | head -1)
           if [ -f "$MAIN_APP/embedded.mobileprovision" ]; then
-            MAIN_UUID=$(/usr/bin/security cms -D -i "$MAIN_APP/embedded.mobileprovision" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin)
+            MAIN_UUID=$(extract_uuid "$MAIN_APP/embedded.mobileprovision")
             MAIN_BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$MAIN_APP/Info.plist")
-            PROFILES_XML="$PROFILES_XML
-              <key>$MAIN_BUNDLE</key>
-              <string>$MAIN_UUID</string>"
+            PROFILES_XML="$PROFILES_XML<key>$MAIN_BUNDLE</key><string>$MAIN_UUID</string>"
             echo "Main app: $MAIN_BUNDLE -> $MAIN_UUID"
+          else
+            echo "WARNING: No embedded.mobileprovision in main app"
+            ls -la "$MAIN_APP/"
           fi
 
           # Extension profiles (if any)
           if [ -d "$MAIN_APP/PlugIns" ]; then
             for EXTENSION in "$MAIN_APP/PlugIns"/*.appex; do
+              [ -d "$EXTENSION" ] || continue
               if [ -f "$EXTENSION/embedded.mobileprovision" ]; then
-                EXT_UUID=$(/usr/bin/security cms -D -i "$EXTENSION/embedded.mobileprovision" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin)
+                EXT_UUID=$(extract_uuid "$EXTENSION/embedded.mobileprovision")
                 EXT_BUNDLE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$EXTENSION/Info.plist")
-                PROFILES_XML="$PROFILES_XML
-              <key>$EXT_BUNDLE</key>
-              <string>$EXT_UUID</string>"
+                PROFILES_XML="$PROFILES_XML<key>$EXT_BUNDLE</key><string>$EXT_UUID</string>"
                 echo "Extension: $EXT_BUNDLE -> $EXT_UUID"
+              else
+                echo "WARNING: No embedded.mobileprovision in $(basename $EXTENSION)"
               fi
             done
           fi
-
-          PROFILES_XML="$PROFILES_XML
-            </dict>"
 
           # Detect signing certificate name from the archive
           SIGN_IDENTITY=$(codesign -dvv "$MAIN_APP" 2>&1 | grep "Authority=" | head -1 | sed 's/Authority=//')
           echo "Signing identity: $SIGN_IDENTITY"
 
           cat > $RUNNER_TEMP/ExportOptions.plist <<PLISTEOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>method</key>
-              <string>app-store-connect</string>
-              <key>signingStyle</key>
-              <string>manual</string>
-              <key>teamID</key>
-              <string>${TEAM_ID}</string>
-              <key>signingCertificate</key>
-              <string>${SIGN_IDENTITY}</string>
-              <key>provisioningProfiles</key>
-              ${PROFILES_XML}
-              <key>uploadSymbols</key>
-              <true/>
-          </dict>
-          </plist>
-          PLISTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>teamID</key>
+    <string>${TEAM_ID}</string>
+    <key>signingCertificate</key>
+    <string>${SIGN_IDENTITY}</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        ${PROFILES_XML}
+    </dict>
+    <key>uploadSymbols</key>
+    <true/>
+</dict>
+</plist>
+PLISTEOF
 
-          echo "Generated ExportOptions.plist:"
+          echo "=== Generated ExportOptions.plist ==="
           cat $RUNNER_TEMP/ExportOptions.plist
 
       - name: Export IPA
