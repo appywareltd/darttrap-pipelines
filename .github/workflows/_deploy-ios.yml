@@ -188,28 +188,33 @@ jobs:
           SIGN_IDENTITY=$(codesign -dvv "$MAIN_APP" 2>&1 | grep "Authority=" | head -1 | sed 's/Authority=//')
           echo "Signing identity: $SIGN_IDENTITY"
 
-          cat > $RUNNER_TEMP/ExportOptions.plist <<PLISTEOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>method</key>
-    <string>app-store-connect</string>
-    <key>signingStyle</key>
-    <string>manual</string>
-    <key>teamID</key>
-    <string>${TEAM_ID}</string>
-    <key>signingCertificate</key>
-    <string>${SIGN_IDENTITY}</string>
-    <key>provisioningProfiles</key>
-    <dict>
-        ${PROFILES_XML}
-    </dict>
-    <key>uploadSymbols</key>
-    <true/>
-</dict>
-</plist>
-PLISTEOF
+          cat > $RUNNER_TEMP/ExportOptions.plist << 'PLISTEOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>app-store-connect</string>
+              <key>signingStyle</key>
+              <string>manual</string>
+              <key>teamID</key>
+              <string>PLACEHOLDER_TEAM</string>
+              <key>signingCertificate</key>
+              <string>PLACEHOLDER_CERT</string>
+              <key>provisioningProfiles</key>
+              <dict>
+                  PLACEHOLDER_PROFILES
+              </dict>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          PLISTEOF
+
+          # Replace placeholders with actual values
+          sed -i '' "s|PLACEHOLDER_TEAM|${TEAM_ID}|" $RUNNER_TEMP/ExportOptions.plist
+          sed -i '' "s|PLACEHOLDER_CERT|${SIGN_IDENTITY}|" $RUNNER_TEMP/ExportOptions.plist
+          sed -i '' "s|PLACEHOLDER_PROFILES|${PROFILES_XML}|" $RUNNER_TEMP/ExportOptions.plist
 
           echo "=== Generated ExportOptions.plist ==="
           cat $RUNNER_TEMP/ExportOptions.plist
